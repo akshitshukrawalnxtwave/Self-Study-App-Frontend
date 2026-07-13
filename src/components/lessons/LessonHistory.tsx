@@ -1,13 +1,18 @@
+import type { LessonSummary } from '../../types/api';
+import { titleFromLessonUrl } from '../../utils/lessonUrls';
+
 type LessonHistoryProps = {
-  lessons: string[];
+  lessons: LessonSummary[];
   selectedUrl: string | null;
   onSelect: (url: string) => void;
   isLoading?: boolean;
 };
 
-function lessonLabel(url: string): string {
-  const filename = url.split('/').pop() ?? url;
-  return filename.replace('.html', '').replace(/^\d+-/, '');
+function lessonLabel(lesson: LessonSummary): string {
+  if (lesson.title) {
+    return lesson.title;
+  }
+  return titleFromLessonUrl(lesson.url);
 }
 
 export function LessonHistory({
@@ -38,14 +43,14 @@ export function LessonHistory({
     <div className="lesson-history">
       <h3 className="lesson-history__title">Lessons</h3>
       <ul className="lesson-history__list">
-        {lessons.map((url) => (
-          <li key={url}>
+        {lessons.map((lesson) => (
+          <li key={lesson.id ?? lesson.url}>
             <button
               type="button"
-              className={`lesson-history__item${selectedUrl === url ? ' lesson-history__item--active' : ''}`}
-              onClick={() => onSelect(url)}
+              className={`lesson-history__item${selectedUrl === lesson.url ? ' lesson-history__item--active' : ''}`}
+              onClick={() => onSelect(lesson.url)}
             >
-              {lessonLabel(url)}
+              {lessonLabel(lesson)}
             </button>
           </li>
         ))}

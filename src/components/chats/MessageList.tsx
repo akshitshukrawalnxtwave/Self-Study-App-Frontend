@@ -1,9 +1,30 @@
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { Components } from 'react-markdown';
 import type { Message } from '../../types/api';
 
 type MessageListProps = {
   messages: Message[];
   isLoading: boolean;
 };
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
+  ),
+};
+
+function MessageContent({ content }: { content: string }) {
+  return (
+    <div className="message__content">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
 
 export function MessageList({ messages, isLoading }: MessageListProps) {
   if (messages.length === 0 && isLoading) {
@@ -35,7 +56,7 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
           <span className="message__role">
             {message.role === 'user' ? 'You' : 'Teacher'}
           </span>
-          <p className="message__content">{message.content}</p>
+          <MessageContent content={message.content} />
         </div>
       ))}
       {isLoading && (

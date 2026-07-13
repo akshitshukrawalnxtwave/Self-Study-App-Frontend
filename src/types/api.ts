@@ -27,6 +27,7 @@ export type Turn = {
   messages: Message[];
   artifacts: Artifact[];
   panel?: {
+    /** S3/CDN URL or Django static path for iframe src. */
     html_url: string | null;
   };
 };
@@ -60,4 +61,20 @@ export type ChatSession = {
 export type CreateSessionInput = {
   title: string;
   topic_slug: string;
+};
+
+/** Lesson entry for sidebar + iframe (S3 or Django static URL from API). */
+export type LessonSummary = {
+  id?: string;
+  url: string;
+  title?: string;
+};
+
+/** Raw item from GET /api/workspaces/{id}/lessons/ */
+export type LessonListItem = {
+  id?: string;
+  title?: string;
+  path?: string;
+  url?: string;
+  html_url?: string;
 };
