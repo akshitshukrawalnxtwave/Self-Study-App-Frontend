@@ -78,3 +78,27 @@ export type LessonListItem = {
   url?: string;
   html_url?: string;
 };
+
+export type LearningMaterialKind = 'reference' | 'learning_record' | 'resource';
+
+export type LearningMaterialFormat = 'html' | 'markdown';
+
+/** Learning material entry for sidebar + viewer (reference HTML, learning records, etc.). */
+export type LearningMaterialSummary = {
+  id?: string;
+  kind: LearningMaterialKind;
+  url: string;
+  path?: string;
+  title?: string;
+  format: LearningMaterialFormat;
+};
+
+/** Raw item from GET /api/workspaces/{id}/materials/ */
+export type LearningMaterialListItem = {
+  id?: string;
+  kind: LearningMaterialKind;
+  title?: string;
+  path?: string;
+  url?: string;
+  format?: LearningMaterialFormat;
+};

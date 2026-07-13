@@ -1,5 +1,12 @@
-import type { CreateWorkspaceInput, LessonListItem, LessonSummary, Workspace } from '../types/api';
-import { resolveLessonUrl } from '../utils/lessonUrls';
+import type {
+  CreateWorkspaceInput,
+  LearningMaterialListItem,
+  LearningMaterialSummary,
+  LessonListItem,
+  LessonSummary,
+  Workspace,
+} from '../types/api';
+import { formatFromMaterialPath, normalizeLessonUrl, resolveLessonUrl, titleFromLessonUrl } from '../utils/lessonUrls';
 import { api, ApiError } from './client';
 import { USE_MOCK_API } from './config';
 import { MOCK_WORKSPACES } from '../fixtures/mockWorkspaces';
@@ -116,4 +123,60 @@ export async function fetchWorkspaceLessons(workspaceId: string): Promise<Lesson
     data.map((lesson) => resolveLessonSummary(workspaceId, lesson)),
   );
   return resolved.filter((lesson): lesson is LessonSummary => lesson !== null);
+}
+
+function resolveLearningMaterialSummary(
+  workspaceId: string,
+  item: LearningMaterialListItem,
+): LearningMaterialSummary | null {
+  const path = item.path ?? '';
+  const rawUrl = item.url;
+  if (!rawUrl) {
+    return null;
+  }
+
+  const url = normalizeLessonUrl(rawUrl, workspaceId);
+  const format = item.format ?? (path ? formatFromMaterialPath(path) : formatFromMaterialPath(url));
+
+  return {
+    id: item.id,
+    kind: item.kind,
+    url,
+    path: path || undefined,
+    title: item.title ?? (path ? titleFromLessonUrl(path) : titleFromLessonUrl(url)),
+    format,
+  };
+}
+
+/** GET /api/workspaces/{id}/materials/ → reference sheets, learning records, etc. */
+export async function fetchWorkspaceLearningMaterials(
+  workspaceId: string,
+): Promise<LearningMaterialSummary[]> {
+  if (USE_MOCK_API) {
+    await delay(200);
+    if (workspaceId === 'demo') {
+      return [
+        {
+          kind: 'reference',
+          url: '/workspaces/demo/reference/hydrostatics-cheatsheet.html',
+          path: 'reference/hydrostatics-cheatsheet.html',
+          title: 'Hydrostatics cheatsheet',
+          format: 'html',
+        },
+        {
+          kind: 'learning_record',
+          url: '/workspaces/demo/learning-records/0001-fluid-mechanics-started.md',
+          path: 'learning-records/0001-fluid-mechanics-started.md',
+          title: 'Fluid mechanics started',
+          format: 'markdown',
+        },
+      ];
+    }
+    return [];
+  }
+
+  const data = await api<LearningMaterialListItem[]>(`/workspaces/${workspaceId}/materials/`);
+  return data
+    .map((item) => resolveLearningMaterialSummary(workspaceId, item))
+    .filter((item): item is LearningMaterialSummary => item !== null);
 }

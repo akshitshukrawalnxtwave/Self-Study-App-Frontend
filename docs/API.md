@@ -296,6 +296,97 @@ Accept: application/json
 
 ---
 
+### 3b. List learning material
+
+Populate the **Learning material** tab (reference sheets, learning records, resources).
+
+| | |
+|---|---|
+| **Method** | `GET` |
+| **Path** | `/api/workspaces/{workspace_id}/materials/` |
+| **Auth** | None (M5: required) |
+| **Frontend** | `fetchWorkspaceLearningMaterials()` in `src/api/workspaces.ts` |
+
+#### Request
+
+```http
+GET /api/workspaces/abc-uuid/materials/ HTTP/1.1
+Accept: application/json
+```
+
+#### Response `200 OK`
+
+```json
+[
+  {
+    "id": "mat-uuid-1",
+    "kind": "reference",
+    "path": "reference/series-and-dataframe.html",
+    "url": "/workspaces/abc-uuid/reference/series-and-dataframe.html",
+    "title": "Series and Dataframe",
+    "format": "html"
+  },
+  {
+    "id": "mat-uuid-2",
+    "kind": "learning_record",
+    "path": "learning-records/0001-pandas-learning-started.md",
+    "url": "/workspaces/abc-uuid/learning-records/0001-pandas-learning-started.md",
+    "title": "Pandas learning started",
+    "format": "markdown"
+  },
+  {
+    "id": "mat-uuid-3",
+    "kind": "resource",
+    "path": "RESOURCES.md",
+    "url": "/workspaces/abc-uuid/RESOURCES.md",
+    "title": "Resources",
+    "format": "markdown"
+  }
+]
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string (uuid) | no | Stable ID if stored in DB |
+| `kind` | string | yes | `reference` \| `learning_record` \| `resource` |
+| `path` | string | yes | Workspace-relative path |
+| `url` | string | yes | Proxy URL for viewer (`/workspaces/{id}/...`, never presigned S3) |
+| `title` | string | no | Sidebar label (frontend derives from filename if omitted) |
+| `format` | string | yes | `html` for iframe, `markdown` for rendered `.md` |
+
+#### Backend behaviour
+
+List files from the workspace (disk or S3):
+
+| `kind` | Source path | `format` |
+|--------|-------------|----------|
+| `reference` | `reference/*.html` | `html` |
+| `learning_record` | `learning-records/*.md` | `markdown` |
+| `resource` | `RESOURCES.md`, `NOTES.md` (optional) | `markdown` |
+
+- Sort: references by filename asc; learning records by filename asc; root markdown files first among resources.
+- Return `[]` if none exist yet.
+
+#### File serving (same proxy as lessons)
+
+Markdown and reference HTML are fetched by the browser via:
+
+```http
+GET /workspaces/abc-uuid/reference/series-and-dataframe.html
+GET /workspaces/abc-uuid/learning-records/0001-pandas-learning-started.md
+GET /workspaces/abc-uuid/RESOURCES.md
+```
+
+The proxy must allow `reference/`, `learning-records/`, and root `*.md` paths — not only `lessons/`.
+
+#### Error responses
+
+| Status | When |
+|--------|------|
+| `404` | Workspace not found |
+
+---
+
 ### 4. Get chat history
 
 Load all previous messages when opening a workspace session.
@@ -699,8 +790,10 @@ All JSON API errors should use a consistent shape:
 | New skill | `POST /api/workspaces/` | `src/hooks/useWorkspaces.ts` |
 | Open workspace | `GET /api/workspaces/{id}/messages/` | `src/hooks/useChat.ts` |
 | Open workspace | `GET /api/workspaces/{id}/lessons/` | `src/hooks/useLessonPanel.ts` |
+| Open workspace | `GET /api/workspaces/{id}/materials/` | `src/hooks/useLearningMaterials.ts` |
 | Send message | `POST /api/workspaces/{id}/chat/` | `src/hooks/useChat.ts` |
 | Lesson renders | `GET /workspaces/{id}/lessons/...` | `src/components/lessons/LessonViewer.tsx` |
+| Material renders | `GET /workspaces/{id}/reference/...` or `.../learning-records/...` | `src/components/lessons/LearningMaterialViewer.tsx` |
 | Pick old lesson | *(none — local state)* | `src/hooks/useLessonPanel.ts` |
 
 ### Enable real backend
@@ -744,6 +837,7 @@ Alternatively, `panel.html_url` may become a presigned S3 URL. The frontend only
 | `GET` | `/api/workspaces/` | — | `Workspace[]` |
 | `POST` | `/api/workspaces/` | `{ title, topic_slug }` | `Workspace` |
 | `GET` | `/api/workspaces/{id}/lessons/` | — | `{ url, path?, title? }[]` |
+| `GET` | `/api/workspaces/{id}/materials/` | — | `{ kind, url, path, format, title? }[]` |
 | `GET` | `/api/workspaces/{id}/messages/` | — | `StoredMessage[]` |
 | `POST` | `/api/workspaces/{id}/chat/` | `{ content }` | `Turn` |
-| `GET` | `/workspaces/{id}/{file_path}` | — | Raw file (HTML/CSS/JS) |
+| `GET` | `/workspaces/{id}/{file_path}` | — | Raw file (HTML/CSS/JS/MD) |
