@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { SplitLayout } from '../components/layout/SplitLayout';
 import { ChatBox } from '../components/chats';
+import { ContentPanel, type ContentPanelTab } from '../components/lessons/ContentPanel';
+import { LearningMaterialViewer } from '../components/lessons/LearningMaterialViewer';
 import { LessonViewer } from '../components/lessons/LessonViewer';
-import { LessonHistory } from '../components/lessons/LessonHistory';
 import { useWorkspace } from '../hooks/useWorkspace';
 import { useChat } from '../hooks/useChat';
+import { useLearningMaterials } from '../hooks/useLearningMaterials';
 import { useLessonPanel } from '../hooks/useLessonPanel';
 
 export function BasePage() {
@@ -13,6 +16,8 @@ export function BasePage() {
     sessionId?: string;
   }>();
   const id = workspaceId ?? sessionId;
+  const [activeTab, setActiveTab] = useState<ContentPanelTab>('lessons');
+
   const { workspace, isLoading: workspaceLoading, error: workspaceError } =
     useWorkspace(id);
 
@@ -21,6 +26,14 @@ export function BasePage() {
 
   const { htmlUrl, lessons, isLoading: lessonsLoading, selectLesson } =
     useLessonPanel(id ?? null, lastTurn);
+
+  const {
+    materials,
+    selectedUrl: materialUrl,
+    selectedMaterial,
+    isLoading: materialsLoading,
+    selectMaterial,
+  } = useLearningMaterials(id ?? null);
 
   if (workspaceLoading) {
     return (
@@ -41,6 +54,9 @@ export function BasePage() {
     );
   }
 
+  const panelSelectedUrl = activeTab === 'lessons' ? htmlUrl : materialUrl;
+  const onPanelSelect = activeTab === 'lessons' ? selectLesson : selectMaterial;
+
   return (
     <div className="base-page">
       <header className="teach-header teach-header--with-back">
@@ -54,11 +70,15 @@ export function BasePage() {
       </header>
 
       <div className="teach-toolbar">
-        <LessonHistory
+        <ContentPanel
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
           lessons={lessons}
-          selectedUrl={htmlUrl}
-          onSelect={selectLesson}
-          isLoading={lessonsLoading}
+          materials={materials}
+          selectedUrl={panelSelectedUrl}
+          onSelect={onPanelSelect}
+          lessonsLoading={lessonsLoading}
+          materialsLoading={materialsLoading}
         />
       </div>
 
@@ -72,7 +92,22 @@ export function BasePage() {
           />
         }
         right={
-          <LessonViewer htmlUrl={htmlUrl} workspaceTitle={workspace.title} />
+          activeTab === 'lessons' ? (
+            <LessonViewer
+              htmlUrl={htmlUrl}
+              workspaceId={id}
+              workspaceTitle={workspace.title}
+              onNavigate={selectLesson}
+            />
+          ) : (
+            <LearningMaterialViewer
+              url={materialUrl}
+              format={selectedMaterial?.format ?? null}
+              workspaceId={id}
+              workspaceTitle={workspace.title}
+              onNavigate={selectMaterial}
+            />
+          )
         }
       />
     </div>

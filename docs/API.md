@@ -103,11 +103,30 @@ These match `src/types/api.ts`.
 - `url` is required for `lesson` and `reference` artifacts when they are renderable in the panel.
 - `url` may be omitted for hidden files (`MISSION.md`, `learning-records/`, etc.).
 
-### Turn (chat response)
+### Chat turn statuses
+
+| Status | Meaning |
+|--------|---------|
+| `pending` | Accepted, agent has not finished |
+| `running` | Agent is working |
+| `completed` | Result is ready (`messages`, `artifacts`, `panel`) |
+| `failed` | Error (`error`, `code`) |
+
+### ChatTurnAccepted (POST /chat/ — HTTP 202)
 
 ```json
 {
   "turn_id": "uuid",
+  "status": "pending"
+}
+```
+
+### Turn (completed poll response)
+
+```json
+{
+  "turn_id": "uuid",
+  "status": "completed",
   "messages": [ /* Message[] — assistant messages for this turn */ ],
   "artifacts": [ /* Artifact[] — files created/updated this turn */ ],
   "panel": {
@@ -118,6 +137,19 @@ These match `src/types/api.ts`.
 
 - `panel.html_url` may be `null` when the turn is chat-only (e.g. mission interview with no lesson yet).
 - `messages` contains **assistant** messages only for this turn (the frontend adds the user message locally before the request).
+
+### ChatTurnFailed (failed poll response)
+
+```json
+{
+  "turn_id": "uuid",
+  "status": "failed",
+  "error": "Agent timed out after 120s",
+  "code": "AGENT_TIMEOUT"
+}
+```
+
+`code` is `AGENT_TIMEOUT` or `INTERNAL_ERROR`.
 
 ### Workspace
 
@@ -296,6 +328,97 @@ Accept: application/json
 
 ---
 
+### 3b. List learning material
+
+Populate the **Learning material** tab (reference sheets, learning records, resources).
+
+| | |
+|---|---|
+| **Method** | `GET` |
+| **Path** | `/api/workspaces/{workspace_id}/materials/` |
+| **Auth** | None (M5: required) |
+| **Frontend** | `fetchWorkspaceLearningMaterials()` in `src/api/workspaces.ts` |
+
+#### Request
+
+```http
+GET /api/workspaces/abc-uuid/materials/ HTTP/1.1
+Accept: application/json
+```
+
+#### Response `200 OK`
+
+```json
+[
+  {
+    "id": "mat-uuid-1",
+    "kind": "reference",
+    "path": "reference/series-and-dataframe.html",
+    "url": "/workspaces/abc-uuid/reference/series-and-dataframe.html",
+    "title": "Series and Dataframe",
+    "format": "html"
+  },
+  {
+    "id": "mat-uuid-2",
+    "kind": "learning_record",
+    "path": "learning-records/0001-pandas-learning-started.md",
+    "url": "/workspaces/abc-uuid/learning-records/0001-pandas-learning-started.md",
+    "title": "Pandas learning started",
+    "format": "markdown"
+  },
+  {
+    "id": "mat-uuid-3",
+    "kind": "resource",
+    "path": "RESOURCES.md",
+    "url": "/workspaces/abc-uuid/RESOURCES.md",
+    "title": "Resources",
+    "format": "markdown"
+  }
+]
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string (uuid) | no | Stable ID if stored in DB |
+| `kind` | string | yes | `reference` \| `learning_record` \| `resource` |
+| `path` | string | yes | Workspace-relative path |
+| `url` | string | yes | Proxy URL for viewer (`/workspaces/{id}/...`, never presigned S3) |
+| `title` | string | no | Sidebar label (frontend derives from filename if omitted) |
+| `format` | string | yes | `html` for iframe, `markdown` for rendered `.md` |
+
+#### Backend behaviour
+
+List files from the workspace (disk or S3):
+
+| `kind` | Source path | `format` |
+|--------|-------------|----------|
+| `reference` | `reference/*.html` | `html` |
+| `learning_record` | `learning-records/*.md` | `markdown` |
+| `resource` | `RESOURCES.md`, `NOTES.md` (optional) | `markdown` |
+
+- Sort: references by filename asc; learning records by filename asc; root markdown files first among resources.
+- Return `[]` if none exist yet.
+
+#### File serving (same proxy as lessons)
+
+Markdown and reference HTML are fetched by the browser via:
+
+```http
+GET /workspaces/abc-uuid/reference/series-and-dataframe.html
+GET /workspaces/abc-uuid/learning-records/0001-pandas-learning-started.md
+GET /workspaces/abc-uuid/RESOURCES.md
+```
+
+The proxy must allow `reference/`, `learning-records/`, and root `*.md` paths — not only `lessons/`.
+
+#### Error responses
+
+| Status | When |
+|--------|------|
+| `404` | Workspace not found |
+
+---
+
 ### 4. Get chat history
 
 Load all previous messages when opening a workspace session.
@@ -359,16 +482,16 @@ No body.
 
 ---
 
-### 5. Send chat message
+### 5. Start chat turn (async)
 
-Main teaching interaction. Runs the agent for one turn.
+Accepts a user message and starts an agent turn. Responds immediately; the client polls for the result.
 
 | | |
 |---|---|
 | **Method** | `POST` |
 | **Path** | `/api/workspaces/{workspace_id}/chat/` |
 | **Auth** | None (M5: required) |
-| **Frontend** | `sendChatMessage()` in `src/api/chat.ts` |
+| **Frontend** | `startChatTurn()` in `src/api/chat.ts`, called by `useChat` |
 
 #### Request
 
@@ -396,13 +519,61 @@ Optional M5 fields (not used by current frontend):
 }
 ```
 
-#### Response `200 OK`
-
-**Chat-only turn** (mission interview, no lesson yet):
+#### Response `202 Accepted`
 
 ```json
 {
   "turn_id": "turn-uuid-1",
+  "status": "pending"
+}
+```
+
+The old sync behaviour (POST waits and returns full `messages` / `artifacts` / `panel`) is gone. Always use `turn_id` from this response for polling.
+
+#### Error responses (start)
+
+| Status | When |
+|--------|------|
+| `400` | Empty or missing `content` |
+| `404` | Workspace not found |
+
+---
+
+### 5b. Poll chat turn
+
+Poll until `status` is `completed` or `failed`. Frontend polls every **10 seconds**.
+
+| | |
+|---|---|
+| **Method** | `GET` |
+| **Path** | `/api/workspaces/{workspace_id}/chat/{turn_id}/` |
+| **Auth** | None (M5: required) |
+| **Frontend** | `fetchChatTurn()` / `waitForChatTurn()` in `src/api/chat.ts` |
+
+#### Response `200 OK` — in progress
+
+```json
+{
+  "turn_id": "turn-uuid-1",
+  "status": "pending"
+}
+```
+
+or
+
+```json
+{
+  "turn_id": "turn-uuid-1",
+  "status": "running"
+}
+```
+
+#### Response `200 OK` — completed (chat-only)
+
+```json
+{
+  "turn_id": "turn-uuid-1",
+  "status": "completed",
   "messages": [
     {
       "role": "assistant",
@@ -417,11 +588,12 @@ Optional M5 fields (not used by current frontend):
 }
 ```
 
-**Turn with new lesson**:
+#### Response `200 OK` — completed (with new lesson)
 
 ```json
 {
   "turn_id": "turn-uuid-2",
+  "status": "completed",
   "messages": [
     {
       "role": "assistant",
@@ -448,26 +620,23 @@ Optional M5 fields (not used by current frontend):
 }
 ```
 
-**Follow-up turn** (chat only, keep current lesson visible):
+#### Response `200 OK` — failed
 
 ```json
 {
-  "turn_id": "turn-uuid-3",
-  "messages": [
-    {
-      "role": "assistant",
-      "type": "text",
-      "content": "Pressure increases with depth because the fluid column above grows heavier. The formula is p = ρgh."
-    }
-  ],
-  "artifacts": [],
-  "panel": {
-    "html_url": "/workspaces/abc-uuid/lessons/0001-hydrostatics.html"
-  }
+  "turn_id": "turn-uuid-1",
+  "status": "failed",
+  "error": "Agent timed out after 120s",
+  "code": "AGENT_TIMEOUT"
 }
 ```
 
-#### Response field usage (frontend)
+| `code` | When |
+|--------|------|
+| `AGENT_TIMEOUT` | Agent exceeded time limit |
+| `INTERNAL_ERROR` | Agent or internal failure |
+
+#### Response field usage (frontend, on `completed`)
 
 | Field | UI effect |
 |-------|-----------|
@@ -475,32 +644,30 @@ Optional M5 fields (not used by current frontend):
 | `panel.html_url` | Sets iframe `src` on right panel; `null` shows empty state |
 | `artifacts` | Available for future UI (badges, notifications); not rendered yet |
 
+#### Client behaviour
+
+1. Show the user message immediately and a loading/typing state for the assistant.
+2. `POST /chat/` → `202` with `turn_id`.
+3. Poll `GET /chat/{turn_id}/` every 10s (one active poll per workspace).
+4. Keep loading state while `pending` / `running`.
+5. On `completed`: append `messages`, update artifacts/panel as before.
+6. On `failed`: show `error`, clear loading state.
+7. Clear the poll on unmount, workspace change, or a new chat send.
+
+`GET /api/workspaces/{id}/messages/` still works for history after the turn completes.
+
 #### Backend behaviour
 
-1. Load workspace and active `ChatSession`.
-2. Persist user `Message`.
-3. Run Claude Agent SDK with `cwd = workspaces/{id}/`.
-4. Agent may write files (`lessons/`, `MISSION.md`, etc.).
-5. Response mapper detects new/updated files this turn.
-6. Build `panel.html_url` from latest lesson written this turn (or keep previous lesson URL).
-7. Persist assistant `Message`(s).
-8. Return `Turn`.
+1. On POST: load workspace and active `ChatSession`, persist user `Message`, enqueue agent work, return `202` + `turn_id`.
+2. Agent runs with `cwd = workspaces/{id}/` (may write `lessons/`, `MISSION.md`, etc.).
+3. On poll while working: return `pending` or `running`.
+4. When done: map artifacts, build `panel.html_url`, persist assistant `Message`(s), return `completed` + `Turn` fields — or `failed` with `error` / `code`.
 
-#### Error responses
+#### Error responses (poll)
 
 | Status | When |
 |--------|------|
-| `400` | Empty or missing `content` |
-| `404` | Workspace not found |
-| `504` | Agent timeout |
-| `500` | Agent or internal error |
-
-```json
-{
-  "error": "Agent timed out after 120s",
-  "code": "AGENT_TIMEOUT"
-}
-```
+| `404` | Workspace or turn not found |
 
 ---
 
@@ -580,10 +747,11 @@ Detection options for the response mapper:
 1. GET  /api/workspaces/                          → populate home page session list
 2. GET  /api/workspaces/{id}/messages/            → load previous chat on session open
 3. GET  /api/workspaces/{id}/lessons/             → populate lesson history sidebar
-4. POST /api/workspaces/{id}/chat/  { content }   → assistant reply + panel.html_url
-5. GET  /workspaces/{id}/lessons/0001-....html     → iframe loads lesson HTML
-6. GET  /workspaces/{id}/assets/lesson.css        → loaded by HTML <link>
-7. GET  /workspaces/{id}/assets/quiz.js           → loaded by HTML <script>
+4. POST /api/workspaces/{id}/chat/  { content }   → 202 { turn_id, status: pending }
+5. GET  /api/workspaces/{id}/chat/{turn_id}/      → poll until completed | failed
+6. GET  /workspaces/{id}/lessons/0001-....html     → iframe loads lesson HTML
+7. GET  /workspaces/{id}/assets/lesson.css        → loaded by HTML <link>
+8. GET  /workspaces/{id}/assets/quiz.js           → loaded by HTML <script>
 ```
 
 Selecting an old lesson from the sidebar changes the iframe `src` locally — **no API call**.
@@ -699,8 +867,11 @@ All JSON API errors should use a consistent shape:
 | New skill | `POST /api/workspaces/` | `src/hooks/useWorkspaces.ts` |
 | Open workspace | `GET /api/workspaces/{id}/messages/` | `src/hooks/useChat.ts` |
 | Open workspace | `GET /api/workspaces/{id}/lessons/` | `src/hooks/useLessonPanel.ts` |
-| Send message | `POST /api/workspaces/{id}/chat/` | `src/hooks/useChat.ts` |
+| Open workspace | `GET /api/workspaces/{id}/materials/` | `src/hooks/useLearningMaterials.ts` |
+| Send message | `POST /api/workspaces/{id}/chat/` → `202` | `src/hooks/useChat.ts` |
+| Poll turn | `GET /api/workspaces/{id}/chat/{turn_id}/` | `src/hooks/useChat.ts` / `src/api/chat.ts` |
 | Lesson renders | `GET /workspaces/{id}/lessons/...` | `src/components/lessons/LessonViewer.tsx` |
+| Material renders | `GET /workspaces/{id}/reference/...` or `.../learning-records/...` | `src/components/lessons/LearningMaterialViewer.tsx` |
 | Pick old lesson | *(none — local state)* | `src/hooks/useLessonPanel.ts` |
 
 ### Enable real backend
@@ -744,6 +915,8 @@ Alternatively, `panel.html_url` may become a presigned S3 URL. The frontend only
 | `GET` | `/api/workspaces/` | — | `Workspace[]` |
 | `POST` | `/api/workspaces/` | `{ title, topic_slug }` | `Workspace` |
 | `GET` | `/api/workspaces/{id}/lessons/` | — | `{ url, path?, title? }[]` |
+| `GET` | `/api/workspaces/{id}/materials/` | — | `{ kind, url, path, format, title? }[]` |
 | `GET` | `/api/workspaces/{id}/messages/` | — | `StoredMessage[]` |
-| `POST` | `/api/workspaces/{id}/chat/` | `{ content }` | `Turn` |
-| `GET` | `/workspaces/{id}/{file_path}` | — | Raw file (HTML/CSS/JS) |
+| `POST` | `/api/workspaces/{id}/chat/` | `{ content }` | `202` `{ turn_id, status: "pending" }` |
+| `GET` | `/api/workspaces/{id}/chat/{turn_id}/` | — | Poll: `pending` \| `running` \| completed `Turn` \| `failed` |
+| `GET` | `/workspaces/{id}/{file_path}` | — | Raw file (HTML/CSS/JS/MD) |

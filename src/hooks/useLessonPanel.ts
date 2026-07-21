@@ -1,38 +1,45 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LessonSummary, Turn } from '../types/api';
 import { fetchWorkspaceLessons } from '../api/workspaces';
-import { resolveLessonUrl, titleFromLessonUrl } from '../utils/lessonUrls';
+import { normalizeLessonUrl, titleFromLessonUrl } from '../utils/lessonUrls';
 
-function urlsFromTurn(turn: Turn): string[] {
+function urlsFromTurn(turn: Turn, workspaceId: string): string[] {
   const urls: string[] = [];
   const panelUrl = turn.panel?.html_url;
   if (panelUrl) {
-    urls.push(resolveLessonUrl(panelUrl));
+    urls.push(normalizeLessonUrl(panelUrl, workspaceId));
   }
   for (const artifact of turn.artifacts) {
     if (artifact.type === 'lesson' && artifact.url) {
-      urls.push(resolveLessonUrl(artifact.url));
+      urls.push(normalizeLessonUrl(artifact.url, workspaceId));
     }
   }
   return urls;
 }
 
-function turnHasNewLesson(turn: Turn, knownUrls: Set<string>): boolean {
-  return urlsFromTurn(turn).some((url) => !knownUrls.has(url));
+function turnHasNewLesson(turn: Turn, workspaceId: string, knownUrls: Set<string>): boolean {
+  return urlsFromTurn(turn, workspaceId).some((url) => !knownUrls.has(url));
 }
 
-function lessonFromTurn(turn: Turn): LessonSummary | null {
+function lessonFromTurn(turn: Turn, workspaceId: string): LessonSummary | null {
   const lessonArtifact = turn.artifacts.find((artifact) => artifact.type === 'lesson');
   const rawUrl = turn.panel?.html_url ?? lessonArtifact?.url ?? null;
   if (!rawUrl) {
     return null;
   }
   return {
-    url: resolveLessonUrl(rawUrl),
+    url: normalizeLessonUrl(rawUrl, workspaceId),
     title: lessonArtifact?.path
       ? titleFromLessonUrl(lessonArtifact.path)
       : titleFromLessonUrl(rawUrl),
   };
+}
+
+function normalizeLessons(items: LessonSummary[], workspaceId: string): LessonSummary[] {
+  return items.map((lesson) => ({
+    ...lesson,
+    url: normalizeLessonUrl(lesson.url, workspaceId),
+  }));
 }
 
 export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null) {
@@ -52,8 +59,9 @@ export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null
     setIsLoading(true);
     try {
       const items = await fetchWorkspaceLessons(workspaceId);
-      setLessons(items);
-      return items;
+      const normalized = normalizeLessons(items, workspaceId);
+      setLessons(normalized);
+      return normalized;
     } finally {
       setIsLoading(false);
     }
@@ -73,10 +81,10 @@ export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null
 
   useEffect(() => {
     const panelUrl = lastTurn?.panel?.html_url ?? null;
-    if (panelUrl) {
-      setSelectedUrl(resolveLessonUrl(panelUrl));
+    if (panelUrl && workspaceId) {
+      setSelectedUrl(normalizeLessonUrl(panelUrl, workspaceId));
     }
-  }, [lastTurn]);
+  }, [lastTurn, workspaceId]);
 
   useEffect(() => {
     if (!selectedUrl && lessons.length > 0) {
@@ -95,11 +103,11 @@ export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null
     processedTurnRef.current = lastTurn.turn_id;
 
     const knownUrls = new Set(lessonsRef.current.map((lesson) => lesson.url));
-    if (!turnHasNewLesson(lastTurn, knownUrls)) {
+    if (!turnHasNewLesson(lastTurn, workspaceId, knownUrls)) {
       return;
     }
 
-    const optimisticLesson = lessonFromTurn(lastTurn);
+    const optimisticLesson = lessonFromTurn(lastTurn, workspaceId);
     if (optimisticLesson && !knownUrls.has(optimisticLesson.url)) {
       setLessons((current) => [...current, optimisticLesson]);
     }
@@ -107,9 +115,12 @@ export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null
     void loadLessons();
   }, [workspaceId, lastTurn, loadLessons]);
 
-  const selectLesson = useCallback((url: string) => {
-    setSelectedUrl(url);
-  }, []);
+  const selectLesson = useCallback(
+    (url: string) => {
+      setSelectedUrl(workspaceId ? normalizeLessonUrl(url, workspaceId) : normalizeLessonUrl(url));
+    },
+    [workspaceId],
+  );
 
   return {
     htmlUrl: selectedUrl,

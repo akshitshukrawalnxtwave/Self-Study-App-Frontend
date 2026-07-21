@@ -22,8 +22,20 @@ export type Artifact = {
   action: ArtifactAction;
 };
 
+export type ChatTurnStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export type ChatTurnErrorCode = 'AGENT_TIMEOUT' | 'INTERNAL_ERROR';
+
+/** Immediate response from POST /chat/ (HTTP 202). */
+export type ChatTurnAccepted = {
+  turn_id: string;
+  status: 'pending';
+};
+
+/** Completed turn — assistant messages, artifacts, and panel URL. */
 export type Turn = {
   turn_id: string;
+  status?: 'completed';
   messages: Message[];
   artifacts: Artifact[];
   panel?: {
@@ -31,6 +43,21 @@ export type Turn = {
     html_url: string | null;
   };
 };
+
+export type ChatTurnFailed = {
+  turn_id: string;
+  status: 'failed';
+  error: string;
+  code: ChatTurnErrorCode;
+};
+
+export type ChatTurnInProgress = {
+  turn_id: string;
+  status: 'pending' | 'running';
+};
+
+/** Response from GET /chat/{turnId}/. */
+export type ChatTurnPollResponse = ChatTurnInProgress | Turn | ChatTurnFailed;
 
 export type Workspace = {
   id: string;
@@ -77,4 +104,28 @@ export type LessonListItem = {
   path?: string;
   url?: string;
   html_url?: string;
+};
+
+export type LearningMaterialKind = 'reference' | 'learning_record' | 'resource';
+
+export type LearningMaterialFormat = 'html' | 'markdown';
+
+/** Learning material entry for sidebar + viewer (reference HTML, learning records, etc.). */
+export type LearningMaterialSummary = {
+  id?: string;
+  kind: LearningMaterialKind;
+  url: string;
+  path?: string;
+  title?: string;
+  format: LearningMaterialFormat;
+};
+
+/** Raw item from GET /api/workspaces/{id}/materials/ */
+export type LearningMaterialListItem = {
+  id?: string;
+  kind: LearningMaterialKind;
+  title?: string;
+  path?: string;
+  url?: string;
+  format?: LearningMaterialFormat;
 };

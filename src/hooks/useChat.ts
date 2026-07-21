@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message, Turn } from '../types/api';
-import { fetchChatHistory, sendChatMessage } from '../api/chat';
+import {
+  ChatTurnFailedError,
+  fetchChatHistory,
+  startChatTurn,
+  waitForChatTurn,
+} from '../api/chat';
 
 export function useChat(workspaceId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -9,7 +14,21 @@ export function useChat(workspaceId: string | null) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+
+  const cancelActivePoll = useCallback(() => {
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+      pollAbortRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
+    cancelActivePoll();
+    setIsLoading(false);
+
     if (!workspaceId) {
       setMessages([]);
       setLastTurn(null);
@@ -50,8 +69,9 @@ export function useChat(workspaceId: string | null) {
 
     return () => {
       cancelled = true;
+      cancelActivePoll();
     };
-  }, [workspaceId]);
+  }, [workspaceId, cancelActivePoll]);
 
   const sendMessage = useCallback(
     async (content: string) => {
@@ -64,23 +84,48 @@ export function useChat(workspaceId: string | null) {
         content: trimmed,
       };
 
-      const userMessageCount = messages.filter((m) => m.role === 'user').length;
+      const userMessageCount = messagesRef.current.filter((m) => m.role === 'user').length;
+
+      // One active poll per workspace — cancel any previous turn.
+      cancelActivePoll();
+      const abortController = new AbortController();
+      pollAbortRef.current = abortController;
 
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
       setError(null);
 
       try {
-        const turn = await sendChatMessage(workspaceId, trimmed, userMessageCount);
+        const { turn_id } = await startChatTurn(workspaceId, trimmed, userMessageCount);
+
+        if (abortController.signal.aborted) return;
+
+        const turn = await waitForChatTurn(workspaceId, turn_id, {
+          signal: abortController.signal,
+        });
+
+        if (abortController.signal.aborted) return;
+
         setLastTurn(turn);
         setMessages((prev) => [...prev, ...turn.messages]);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to send message');
+        if (abortController.signal.aborted) return;
+
+        if (err instanceof ChatTurnFailedError) {
+          setError(err.message);
+        } else {
+          setError(err instanceof Error ? err.message : 'Failed to send message');
+        }
       } finally {
-        setIsLoading(false);
+        if (pollAbortRef.current === abortController) {
+          pollAbortRef.current = null;
+        }
+        if (!abortController.signal.aborted) {
+          setIsLoading(false);
+        }
       }
     },
-    [workspaceId, messages, isLoadingHistory],
+    [workspaceId, isLoadingHistory, cancelActivePoll],
   );
 
   return {
