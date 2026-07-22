@@ -1,122 +1,67 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { LessonSummary, Turn } from '../types/api';
-import { fetchWorkspaceLessons } from '../api/workspaces';
-import { normalizeLessonUrl, titleFromLessonUrl } from '../utils/lessonUrls';
+import { normalizeLessonUrl } from '../utils/lessonUrls';
 
-function urlsFromTurn(turn: Turn, workspaceId: string): string[] {
-  const urls: string[] = [];
-  const panelUrl = turn.panel?.html_url;
-  if (panelUrl) {
-    urls.push(normalizeLessonUrl(panelUrl, workspaceId));
-  }
-  for (const artifact of turn.artifacts) {
-    if (artifact.type === 'lesson' && artifact.url) {
-      urls.push(normalizeLessonUrl(artifact.url, workspaceId));
-    }
-  }
-  return urls;
-}
+type UseLessonPanelArgs = {
+  workspaceId: string | null;
+  lastTurn: Turn | null;
+  lessons: LessonSummary[];
+  isSyncing: boolean;
+};
 
-function turnHasNewLesson(turn: Turn, workspaceId: string, knownUrls: Set<string>): boolean {
-  return urlsFromTurn(turn, workspaceId).some((url) => !knownUrls.has(url));
-}
-
-function lessonFromTurn(turn: Turn, workspaceId: string): LessonSummary | null {
-  const lessonArtifact = turn.artifacts.find((artifact) => artifact.type === 'lesson');
-  const rawUrl = turn.panel?.html_url ?? lessonArtifact?.url ?? null;
-  if (!rawUrl) {
-    return null;
-  }
-  return {
-    url: normalizeLessonUrl(rawUrl, workspaceId),
-    title: lessonArtifact?.path
-      ? titleFromLessonUrl(lessonArtifact.path)
-      : titleFromLessonUrl(rawUrl),
-  };
-}
-
-function normalizeLessons(items: LessonSummary[], workspaceId: string): LessonSummary[] {
-  return items.map((lesson) => ({
-    ...lesson,
-    url: normalizeLessonUrl(lesson.url, workspaceId),
-  }));
-}
-
-export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null) {
-  const [lessons, setLessons] = useState<LessonSummary[]>([]);
+/**
+ * Lesson selection on top of shared workspace file sync.
+ * Panel URL from a turn is applied once per turn; user clicks always win after that.
+ */
+export function useLessonPanel({
+  workspaceId,
+  lastTurn,
+  lessons,
+  isSyncing,
+}: UseLessonPanelArgs) {
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const lessonsRef = useRef(lessons);
-  const processedTurnRef = useRef<string | null>(null);
+  const appliedTurnRef = useRef<string | null>(null);
+  const userPickedRef = useRef(false);
 
-  lessonsRef.current = lessons;
-
-  const loadLessons = useCallback(async () => {
+  useEffect(() => {
     if (!workspaceId) {
-      return [];
-    }
-
-    setIsLoading(true);
-    try {
-      const items = await fetchWorkspaceLessons(workspaceId);
-      const normalized = normalizeLessons(items, workspaceId);
-      setLessons(normalized);
-      return normalized;
-    } finally {
-      setIsLoading(false);
+      setSelectedUrl(null);
+      appliedTurnRef.current = null;
+      userPickedRef.current = false;
     }
   }, [workspaceId]);
 
+  // Apply panel URL once per completed turn, and only after that turn's sync finishes.
   useEffect(() => {
-    if (!workspaceId) {
-      setLessons([]);
-      setSelectedUrl(null);
-      processedTurnRef.current = null;
+    if (!workspaceId || !lastTurn || isSyncing) {
+      return;
+    }
+    if (appliedTurnRef.current === lastTurn.turn_id) {
       return;
     }
 
-    processedTurnRef.current = null;
-    void loadLessons();
-  }, [workspaceId, loadLessons]);
-
-  useEffect(() => {
-    const panelUrl = lastTurn?.panel?.html_url ?? null;
-    if (panelUrl && workspaceId) {
+    const panelUrl = lastTurn.panel?.html_url ?? null;
+    if (panelUrl) {
+      appliedTurnRef.current = lastTurn.turn_id;
+      userPickedRef.current = false;
       setSelectedUrl(normalizeLessonUrl(panelUrl, workspaceId));
     }
-  }, [lastTurn, workspaceId]);
+  }, [lastTurn, workspaceId, isSyncing]);
 
+  // Initial fallback when opening a workspace with existing lessons.
   useEffect(() => {
-    if (!selectedUrl && lessons.length > 0) {
-      setSelectedUrl(lessons[lessons.length - 1].url);
-    }
-  }, [lessons, selectedUrl]);
-
-  useEffect(() => {
-    if (!workspaceId || !lastTurn) {
+    if (isSyncing || selectedUrl || lessons.length === 0 || userPickedRef.current) {
       return;
     }
-
-    if (processedTurnRef.current === lastTurn.turn_id) {
+    if (lastTurn?.panel?.html_url) {
       return;
     }
-    processedTurnRef.current = lastTurn.turn_id;
-
-    const knownUrls = new Set(lessonsRef.current.map((lesson) => lesson.url));
-    if (!turnHasNewLesson(lastTurn, workspaceId, knownUrls)) {
-      return;
-    }
-
-    const optimisticLesson = lessonFromTurn(lastTurn, workspaceId);
-    if (optimisticLesson && !knownUrls.has(optimisticLesson.url)) {
-      setLessons((current) => [...current, optimisticLesson]);
-    }
-
-    void loadLessons();
-  }, [workspaceId, lastTurn, loadLessons]);
+    setSelectedUrl(lessons[lessons.length - 1].url);
+  }, [lessons, selectedUrl, isSyncing, lastTurn]);
 
   const selectLesson = useCallback(
     (url: string) => {
+      userPickedRef.current = true;
       setSelectedUrl(workspaceId ? normalizeLessonUrl(url, workspaceId) : normalizeLessonUrl(url));
     },
     [workspaceId],
@@ -125,7 +70,7 @@ export function useLessonPanel(workspaceId: string | null, lastTurn: Turn | null
   return {
     htmlUrl: selectedUrl,
     lessons,
-    isLoading,
+    isLoading: isSyncing,
     selectLesson,
   };
 }

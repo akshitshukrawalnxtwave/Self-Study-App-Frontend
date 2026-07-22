@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CreateWorkspaceInput, Workspace } from '../types/api';
+import { messageFromApiError } from '../api/client';
 import { createWorkspace, fetchWorkspaces } from '../api/workspaces';
+import { ensureIdentity } from '../auth/identity';
 
 export function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -11,10 +13,11 @@ export function useWorkspaces() {
     setIsLoading(true);
     setError(null);
     try {
+      ensureIdentity();
       const data = await fetchWorkspaces();
       setWorkspaces(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load workspaces');
+      setError(messageFromApiError(err, 'Failed to load workspaces'));
     } finally {
       setIsLoading(false);
     }

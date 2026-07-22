@@ -90,7 +90,7 @@ export function NewSkillModal({ open, onClose, onCreate }: NewSkillModalProps) {
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h2 className="modal__title">New skill</h2>
         <p className="modal__description">
-          Enter a topic to start a new learning workspace. The teacher will interview you for your mission first.
+          Enter a topic to start a new learning workspace. The Self Study AI Assistant will interview you for your mission first.
         </p>
         <form onSubmit={handleSubmit}>
           <label className="modal__label" htmlFor="skill-title">

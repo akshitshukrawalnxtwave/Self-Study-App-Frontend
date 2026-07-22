@@ -6,6 +6,8 @@ import type { Message } from '../../types/api';
 type MessageListProps = {
   messages: Message[];
   isLoading: boolean;
+  /** Live agent activity while polling — ephemeral UI only. */
+  statusMessage?: string | null;
 };
 
 const markdownComponents: Components = {
@@ -18,7 +20,7 @@ const markdownComponents: Components = {
 
 function MessageContent({ content }: { content: string }) {
   return (
-    <div className="message__content">
+    <div className="msg__bubble">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
         {content}
       </ReactMarkdown>
@@ -26,7 +28,11 @@ function MessageContent({ content }: { content: string }) {
   );
 }
 
-export function MessageList({ messages, isLoading }: MessageListProps) {
+export function MessageList({
+  messages,
+  isLoading,
+  statusMessage = null,
+}: MessageListProps) {
   if (messages.length === 0 && isLoading) {
     return (
       <div className="chat-empty">
@@ -38,7 +44,7 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
   if (messages.length === 0 && !isLoading) {
     return (
       <div className="chat-empty">
-        <p>Start a conversation with your teacher.</p>
+        <p>Start a conversation with your assistant.</p>
         <p className="chat-empty__hint">
           First sessions are often mission interviews — you may not see a lesson right away.
         </p>
@@ -46,23 +52,33 @@ export function MessageList({ messages, isLoading }: MessageListProps) {
     );
   }
 
+  const activityText = statusMessage?.trim() || 'Working on your request…';
+
   return (
-    <div className="message-list">
-      {messages.map((message, index) => (
-        <div
-          key={`${message.role}-${index}`}
-          className={`message message--${message.role}`}
-        >
-          <span className="message__role">
-            {message.role === 'user' ? 'You' : 'Teacher'}
-          </span>
-          <MessageContent content={message.content} />
-        </div>
-      ))}
+    <div className="msg-list">
+      {messages.map((message, index) => {
+        const isYou = message.role === 'user';
+        return (
+          <div
+            key={`${message.role}-${index}`}
+            className={`msg ${isYou ? 'msg--you' : 'msg--tutor'}`}
+            style={{ animationDelay: `${Math.min(index, 8) * 0.04}s` }}
+          >
+            <div className="msg__who">
+              {!isYou ? <span className="msg__av">T</span> : null}
+              {isYou ? 'You' : 'Self Study AI Assistant'}
+            </div>
+            <MessageContent content={message.content} />
+          </div>
+        );
+      })}
       {isLoading && (
-        <div className="message message--assistant message--loading">
-          <span className="message__role">Teacher</span>
-          <p className="message__content">Thinking…</p>
+        <div className="msg msg--tutor msg--loading" aria-live="polite">
+          <div className="msg__who">
+            <span className="msg__av">T</span>
+            Self Study AI Assistant
+          </div>
+          <div className="msg__bubble msg__bubble--status">{activityText}</div>
         </div>
       )}
     </div>

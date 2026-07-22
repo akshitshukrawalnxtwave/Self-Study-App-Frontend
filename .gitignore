@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 .env
+.env.production
+AWSCLIV2.pkg
 
 # Editor directories and files
 .vscode/*

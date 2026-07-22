@@ -4,11 +4,11 @@ import type {
   StoredMessage,
   Turn,
 } from '../types/api';
-import { ApiError, api } from './client';
-import { API_BASE_URL, USE_MOCK_API } from './config';
+import { ApiError, api, apiFetch, throwIfNotOk } from './client';
+import { USE_MOCK_API } from './config';
 import { delay, getMockTurn } from '../fixtures/mockTurn';
 
-export const CHAT_POLL_INTERVAL_MS = 10_000;
+export const CHAT_POLL_INTERVAL_MS = 20_000;
 
 type MockPendingTurn = {
   content: string;
@@ -32,23 +32,29 @@ export async function startChatTurn(
   workspaceId: string,
   content: string,
   messageIndex = 0,
+  currentLessonPath?: string,
 ): Promise<ChatTurnAccepted> {
   if (USE_MOCK_API) {
     await delay(100);
     const turnId = `mock-turn-${Date.now()}-${messageIndex}`;
     mockPendingTurns.set(turnId, { content, messageIndex, polls: 0 });
-    return { turn_id: turnId, status: 'pending' };
+    return { turn_id: turnId, status: 'pending', status_message: 'Queued…' };
   }
 
-  const res = await fetch(`${API_BASE_URL}/workspaces/${workspaceId}/chat/`, {
+  const body: { content: string; current_lesson_path?: string } = { content };
+  if (currentLessonPath) {
+    body.current_lesson_path = currentLessonPath;
+  }
+
+  const res = await apiFetch(`/workspaces/${workspaceId}/chat/`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   });
 
   if (res.status !== 202) {
-    const text = await res.text();
-    throw new ApiError(text || 'Failed to start chat turn', res.status);
+    await throwIfNotOk(res, 'Failed to start chat turn');
+    throw new ApiError('Failed to start chat turn', res.status);
   }
 
   return res.json() as Promise<ChatTurnAccepted>;
@@ -68,7 +74,11 @@ export async function fetchChatTurn(
 
     pending.polls += 1;
     if (pending.polls === 1) {
-      return { turn_id: turnId, status: 'running' };
+      return {
+        turn_id: turnId,
+        status: 'running',
+        status_message: 'Writing a lesson…',
+      };
     }
 
     const turn = getMockTurn(pending.content, pending.messageIndex);
@@ -93,9 +103,11 @@ export function waitForChatTurn(
   options: {
     intervalMs?: number;
     signal?: AbortSignal;
+    onStatusMessage?: (message: string) => void;
   } = {},
 ): Promise<Turn> {
   const intervalMs = options.intervalMs ?? CHAT_POLL_INTERVAL_MS;
+  const fallbackStatus = 'Working on your request…';
 
   return new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setInterval> | null = null;
@@ -121,6 +133,10 @@ export function waitForChatTurn(
 
     options.signal?.addEventListener('abort', onAbort);
 
+    const reportStatus = (message: string | undefined) => {
+      options.onStatusMessage?.(message?.trim() || fallbackStatus);
+    };
+
     const poll = async () => {
       if (inFlight || options.signal?.aborted) return;
       inFlight = true;
@@ -144,6 +160,11 @@ export function waitForChatTurn(
         if (data.status === 'failed') {
           cleanup();
           reject(new ChatTurnFailedError(data.error, data.code, data.turn_id));
+          return;
+        }
+
+        if (data.status === 'pending' || data.status === 'running') {
+          reportStatus(data.status_message);
         }
       } catch (err) {
         if (options.signal?.aborted) return;

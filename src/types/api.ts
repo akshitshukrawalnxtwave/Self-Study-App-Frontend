@@ -30,6 +30,8 @@ export type ChatTurnErrorCode = 'AGENT_TIMEOUT' | 'INTERNAL_ERROR';
 export type ChatTurnAccepted = {
   turn_id: string;
   status: 'pending';
+  /** Ephemeral agent activity text while the turn is queued. */
+  status_message?: string;
 };
 
 /** Completed turn — assistant messages, artifacts, and panel URL. */
@@ -39,7 +41,10 @@ export type Turn = {
   messages: Message[];
   artifacts: Artifact[];
   panel?: {
-    /** S3/CDN URL or Django static path for iframe src. */
+    /**
+     * Logical workspace path or legacy proxy/S3 URL for the lesson to show.
+     * Prefer a relative path like `lessons/0001-….html`.
+     */
     html_url: string | null;
   };
 };
@@ -54,6 +59,8 @@ export type ChatTurnFailed = {
 export type ChatTurnInProgress = {
   turn_id: string;
   status: 'pending' | 'running';
+  /** Ephemeral agent activity text — not part of message history. */
+  status_message?: string;
 };
 
 /** Response from GET /chat/{turnId}/. */
@@ -74,6 +81,8 @@ export type CreateWorkspaceInput = {
 export type SendMessageInput = {
   workspaceId: string;
   content: string;
+  /** Workspace-relative path of the lesson open in the panel, if any. */
+  current_lesson_path?: string;
 };
 
 export type ChatSession = {
@@ -90,14 +99,15 @@ export type CreateSessionInput = {
   topic_slug: string;
 };
 
-/** Lesson entry for sidebar + iframe (S3 or Django static URL from API). */
+/** Lesson entry for sidebar + iframe (virtual local URL after sync). */
 export type LessonSummary = {
   id?: string;
+  path: string;
   url: string;
   title?: string;
 };
 
-/** Raw item from GET /api/workspaces/{id}/lessons/ */
+/** Raw item from GET /api/workspaces/{id}/lessons/ (legacy; prefer manifest). */
 export type LessonListItem = {
   id?: string;
   title?: string;
@@ -110,17 +120,17 @@ export type LearningMaterialKind = 'reference' | 'learning_record' | 'resource';
 
 export type LearningMaterialFormat = 'html' | 'markdown';
 
-/** Learning material entry for sidebar + viewer (reference HTML, learning records, etc.). */
+/** Learning material entry for sidebar + viewer (virtual local URL after sync). */
 export type LearningMaterialSummary = {
   id?: string;
   kind: LearningMaterialKind;
+  path: string;
   url: string;
-  path?: string;
   title?: string;
   format: LearningMaterialFormat;
 };
 
-/** Raw item from GET /api/workspaces/{id}/materials/ */
+/** Raw item from GET /api/workspaces/{id}/materials/ (legacy; prefer manifest). */
 export type LearningMaterialListItem = {
   id?: string;
   kind: LearningMaterialKind;
@@ -128,4 +138,33 @@ export type LearningMaterialListItem = {
   path?: string;
   url?: string;
   format?: LearningMaterialFormat;
+};
+
+/** One file entry from GET /api/workspaces/{id}/manifest/ */
+export type WorkspaceManifestFile = {
+  path: string;
+  /** Opaque change token — S3 VersionId preferred, else ETag. */
+  etag: string;
+  size?: number;
+  content_type?: string;
+};
+
+/** Response from GET /api/workspaces/{id}/manifest/ — no presigned URLs. */
+export type WorkspaceManifest = {
+  workspace_version: string;
+  files: WorkspaceManifestFile[];
+};
+
+export type PresignFilesRequest = {
+  paths: string[];
+};
+
+export type PresignedFile = {
+  path: string;
+  url: string;
+  expires_in?: number;
+};
+
+export type PresignFilesResponse = {
+  urls: PresignedFile[];
 };

@@ -1,5 +1,5 @@
 import type { LearningMaterialSummary, LessonSummary } from '../../types/api';
-import { titleFromLessonUrl } from '../../utils/lessonUrls';
+import { sameWorkspaceFileUrl, titleFromLessonUrl } from '../../utils/lessonUrls';
 
 export type ContentPanelTab = 'lessons' | 'materials';
 
@@ -87,10 +87,10 @@ export function ContentPanel({
         <ul className="content-panel__list">
           {activeTab === 'lessons'
             ? lessons.map((lesson) => (
-                <li key={lesson.id ?? lesson.url}>
+                <li key={lesson.id ?? lesson.path ?? lesson.url}>
                   <button
                     type="button"
-                    className={`content-panel__item${selectedUrl === lesson.url ? ' content-panel__item--active' : ''}`}
+                    className={`content-panel__item${sameWorkspaceFileUrl(selectedUrl, lesson.url) ? ' content-panel__item--active' : ''}`}
                     onClick={() => onSelect(lesson.url)}
                   >
                     {lessonLabel(lesson)}
@@ -98,10 +98,10 @@ export function ContentPanel({
                 </li>
               ))
             : materials.map((material) => (
-                <li key={material.id ?? material.url}>
+                <li key={material.id ?? material.path ?? material.url}>
                   <button
                     type="button"
-                    className={`content-panel__item${selectedUrl === material.url ? ' content-panel__item--active' : ''}`}
+                    className={`content-panel__item${sameWorkspaceFileUrl(selectedUrl, material.url) ? ' content-panel__item--active' : ''}`}
                     onClick={() => onSelect(material.url)}
                   >
                     <span className="content-panel__item-label">{materialLabel(material)}</span>
