@@ -1,5 +1,5 @@
 import type { LessonSummary } from '../../types/api';
-import { titleFromLessonUrl } from '../../utils/lessonUrls';
+import { sameWorkspaceFileUrl, titleFromLessonUrl } from '../../utils/lessonUrls';
 
 type LessonHistoryProps = {
   lessons: LessonSummary[];
@@ -44,10 +44,10 @@ export function LessonHistory({
       <h3 className="lesson-history__title">Lessons</h3>
       <ul className="lesson-history__list">
         {lessons.map((lesson) => (
-          <li key={lesson.id ?? lesson.url}>
+          <li key={lesson.id ?? lesson.path ?? lesson.url}>
             <button
               type="button"
-              className={`lesson-history__item${selectedUrl === lesson.url ? ' lesson-history__item--active' : ''}`}
+              className={`lesson-history__item${sameWorkspaceFileUrl(selectedUrl, lesson.url) ? ' lesson-history__item--active' : ''}`}
               onClick={() => onSelect(lesson.url)}
             >
               {lessonLabel(lesson)}

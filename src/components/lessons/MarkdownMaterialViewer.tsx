@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { fetchWorkspaceFile } from '../../api/workspaceFiles';
+import { parseWorkspaceFileUrl } from '../../utils/lessonUrls';
+import { readCachedFileText } from '../../services/workspaceCache';
 
 type MarkdownMaterialViewerProps = {
   url: string;
@@ -17,23 +18,38 @@ export function MarkdownMaterialViewer({ url }: MarkdownMaterialViewerProps) {
     setIsLoading(true);
     setError(null);
 
-    void fetchWorkspaceFile(url)
-      .then((text) => {
+    async function load() {
+      try {
+        const parsed = parseWorkspaceFileUrl(url);
+        let text: string;
+
+        if (parsed) {
+          // Prefer Cache Storage so markdown works even before SW controls the page.
+          text = await readCachedFileText(parsed.workspaceId, parsed.filePath);
+        } else {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Failed to load file (${res.status})`);
+          }
+          text = await res.text();
+        }
+
         if (!cancelled) {
           setContent(text);
         }
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to load material');
           setContent(null);
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) {
           setIsLoading(false);
         }
-      });
+      }
+    }
+
+    void load();
 
     return () => {
       cancelled = true;

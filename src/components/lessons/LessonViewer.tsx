@@ -1,17 +1,25 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  isExternalHttpUrl,
   isExternalLessonUrl,
-  isProxyWorkspaceUrl,
+  isVirtualWorkspaceUrl,
   normalizeLessonUrl,
+  parseWorkspaceFileUrl,
   quizJsUrlFromLesson,
   resolveWorkspaceNavUrl,
 } from '../../utils/lessonUrls';
+import { hasCachedFile, readCachedFileText } from '../../services/workspaceCache';
+import { rewriteWorkspaceHtmlForLocalCache } from '../../services/rewriteWorkspaceHtml';
 
 type LessonViewerProps = {
   htmlUrl: string | null;
   workspaceId?: string;
   workspaceTitle?: string;
   onNavigate?: (url: string) => void;
+  /** True while manifest/presign/download is still running. */
+  isSyncing?: boolean;
+  /** Bumps after each successful sync so the iframe remounts onto fresh cache. */
+  syncGeneration?: number;
 };
 
 function injectQuizScript(iframe: HTMLIFrameElement, lessonUrl: string): void {
@@ -44,11 +52,24 @@ function interceptWorkspaceLinks(
     const href = anchor.getAttribute('href');
     if (!href) return;
 
+    // In-workspace pages stay in the lesson pane.
     const navUrl = resolveWorkspaceNavUrl(href, baseUrl, workspaceId);
-    if (!navUrl) return;
+    if (navUrl) {
+      event.preventDefault();
+      onNavigate(navUrl);
+      return;
+    }
 
-    event.preventDefault();
-    onNavigate(navUrl);
+    // External http(s) links open in a new browser tab.
+    if (isExternalHttpUrl(href, baseUrl)) {
+      event.preventDefault();
+      try {
+        const absolute = new URL(href, baseUrl).href;
+        window.open(absolute, '_blank', 'noopener,noreferrer');
+      } catch {
+        // Ignore malformed hrefs.
+      }
+    }
   };
 
   doc.addEventListener('click', handleClick, true);
@@ -60,8 +81,14 @@ export function LessonViewer({
   workspaceId,
   workspaceTitle,
   onNavigate,
+  isSyncing = false,
+  syncGeneration = 0,
 }: LessonViewerProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [readyUrl, setReadyUrl] = useState<string | null>(null);
+  const [srcDoc, setSrcDoc] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const resolvedUrl = htmlUrl
     ? workspaceId
       ? normalizeLessonUrl(htmlUrl, workspaceId)
@@ -69,24 +96,84 @@ export function LessonViewer({
     : null;
 
   useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !resolvedUrl) return;
+    let cancelled = false;
 
-    const handleLoad = () => {
-      if (isProxyWorkspaceUrl(resolvedUrl)) {
-        try {
-          injectQuizScript(iframe, resolvedUrl);
-        } catch {
-          // Cross-origin fallback — quiz.js must be linked in HTML.
-        }
+    async function loadLesson() {
+      setLoadError(null);
+      setSrcDoc(null);
+
+      if (!resolvedUrl) {
+        setReadyUrl(null);
+        return;
       }
 
-      if (!workspaceId || !onNavigate || !isProxyWorkspaceUrl(resolvedUrl)) {
+      if (isSyncing) {
+        setReadyUrl(null);
+        return;
+      }
+
+      if (!isVirtualWorkspaceUrl(resolvedUrl)) {
+        setReadyUrl(resolvedUrl);
+        return;
+      }
+
+      setReadyUrl(null);
+
+      const parsed = parseWorkspaceFileUrl(resolvedUrl);
+      if (!parsed) {
+        setLoadError('Invalid lesson URL');
+        return;
+      }
+
+      const cached = await hasCachedFile(parsed.workspaceId, parsed.filePath);
+      if (!cached) {
         return;
       }
 
       try {
-        return interceptWorkspaceLinks(iframe, resolvedUrl, workspaceId, onNavigate);
+        const rawHtml = await readCachedFileText(parsed.workspaceId, parsed.filePath);
+        const rewritten = rewriteWorkspaceHtmlForLocalCache(
+          rawHtml,
+          parsed.workspaceId,
+          parsed.filePath,
+        );
+
+        if (!cancelled) {
+          setSrcDoc(rewritten);
+          setReadyUrl(resolvedUrl);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setLoadError(err instanceof Error ? err.message : 'Failed to load lesson');
+        }
+      }
+    }
+
+    void loadLesson();
+    return () => {
+      cancelled = true;
+    };
+  }, [resolvedUrl, isSyncing, syncGeneration]);
+
+  useEffect(() => {
+    const iframe = iframeRef.current;
+    if (!iframe || !readyUrl || readyUrl !== resolvedUrl) return;
+
+    const handleLoad = () => {
+      if (isVirtualWorkspaceUrl(readyUrl)) {
+        try {
+          injectQuizScript(iframe, readyUrl);
+        } catch {
+          // quiz.js should be linked in rewritten HTML.
+        }
+      }
+
+      if (!workspaceId || !onNavigate || !isVirtualWorkspaceUrl(readyUrl)) {
+        return;
+      }
+
+      try {
+        return interceptWorkspaceLinks(iframe, readyUrl, workspaceId, onNavigate);
       } catch {
         return undefined;
       }
@@ -104,7 +191,7 @@ export function LessonViewer({
       iframe.removeEventListener('load', onIframeLoad);
       removeLinks?.();
     };
-  }, [resolvedUrl, workspaceId, onNavigate]);
+  }, [resolvedUrl, readyUrl, workspaceId, onNavigate, syncGeneration, srcDoc]);
 
   if (!resolvedUrl) {
     return (
@@ -114,7 +201,33 @@ export function LessonViewer({
           <p>
             {workspaceTitle
               ? `Keep chatting about ${workspaceTitle} — your first lesson will appear here when ready.`
-              : 'Select a workspace and start chatting. Lessons appear here when the teacher creates them.'}
+              : 'Select a workspace and start chatting. Lessons appear here when the Self Study AI Assistant creates them.'}
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section className="lesson-viewer lesson-viewer--empty">
+        <div className="lesson-viewer__placeholder">
+          <h2>Could not load lesson</h2>
+          <p>{loadError}</p>
+        </div>
+      </section>
+    );
+  }
+
+  if (readyUrl !== resolvedUrl || !srcDoc) {
+    return (
+      <section className="lesson-viewer lesson-viewer--empty">
+        <div className="lesson-viewer__placeholder">
+          <h2>Loading lesson…</h2>
+          <p>
+            {isSyncing
+              ? 'Downloading files from storage, then opening the local copy.'
+              : 'Preparing lesson HTML and assets…'}
           </p>
         </div>
       </section>
@@ -125,15 +238,15 @@ export function LessonViewer({
     <section className="lesson-viewer">
       <iframe
         ref={iframeRef}
-        key={resolvedUrl}
+        key={`${readyUrl}:${syncGeneration}`}
         className="lesson-viewer__iframe"
-        src={resolvedUrl}
+        srcDoc={srcDoc}
         title="Lesson"
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts allow-same-origin allow-popups"
       />
-      {isExternalLessonUrl(resolvedUrl) && (
+      {isExternalLessonUrl(readyUrl) && (
         <p className="lesson-viewer__hint">
-          Linked pages may not load until lesson URLs use /workspaces/… paths from the server.
+          Linked pages may not load until files are synced to local /__workspace/… paths.
         </p>
       )}
     </section>

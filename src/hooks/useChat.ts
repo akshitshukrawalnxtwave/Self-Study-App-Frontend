@@ -6,13 +6,20 @@ import {
   startChatTurn,
   waitForChatTurn,
 } from '../api/chat';
+import {
+  FORBIDDEN_WORKSPACE_MESSAGE,
+  isForbiddenError,
+  messageFromApiError,
+} from '../api/client';
 
 export function useChat(workspaceId: string | null) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [lastTurn, setLastTurn] = useState<Turn | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isForbidden, setIsForbidden] = useState(false);
 
   const pollAbortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef(messages);
@@ -28,11 +35,13 @@ export function useChat(workspaceId: string | null) {
   useEffect(() => {
     cancelActivePoll();
     setIsLoading(false);
+    setStatusMessage(null);
 
     if (!workspaceId) {
       setMessages([]);
       setLastTurn(null);
       setError(null);
+      setIsForbidden(false);
       return;
     }
 
@@ -41,6 +50,7 @@ export function useChat(workspaceId: string | null) {
     async function loadHistory() {
       setIsLoadingHistory(true);
       setError(null);
+      setIsForbidden(false);
       try {
         const history = await fetchChatHistory(workspaceId!);
         if (!cancelled) {
@@ -56,7 +66,12 @@ export function useChat(workspaceId: string | null) {
       } catch (err) {
         if (!cancelled) {
           setMessages([]);
-          setError(err instanceof Error ? err.message : 'Failed to load chat history');
+          if (isForbiddenError(err)) {
+            setIsForbidden(true);
+            setError(FORBIDDEN_WORKSPACE_MESSAGE);
+          } else {
+            setError(messageFromApiError(err, 'Failed to load chat history'));
+          }
         }
       } finally {
         if (!cancelled) {
@@ -74,7 +89,7 @@ export function useChat(workspaceId: string | null) {
   }, [workspaceId, cancelActivePoll]);
 
   const sendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, currentLessonPath?: string) => {
       if (!workspaceId || !content.trim() || isLoadingHistory) return;
 
       const trimmed = content.trim();
@@ -93,15 +108,29 @@ export function useChat(workspaceId: string | null) {
 
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
+      setStatusMessage('Working on your request…');
       setError(null);
+      setIsForbidden(false);
 
       try {
-        const { turn_id } = await startChatTurn(workspaceId, trimmed, userMessageCount);
+        const accepted = await startChatTurn(
+          workspaceId,
+          trimmed,
+          userMessageCount,
+          currentLessonPath,
+        );
 
         if (abortController.signal.aborted) return;
 
-        const turn = await waitForChatTurn(workspaceId, turn_id, {
+        setStatusMessage(accepted.status_message?.trim() || 'Working on your request…');
+
+        const turn = await waitForChatTurn(workspaceId, accepted.turn_id, {
           signal: abortController.signal,
+          onStatusMessage: (message) => {
+            if (!abortController.signal.aborted) {
+              setStatusMessage(message);
+            }
+          },
         });
 
         if (abortController.signal.aborted) return;
@@ -111,10 +140,13 @@ export function useChat(workspaceId: string | null) {
       } catch (err) {
         if (abortController.signal.aborted) return;
 
-        if (err instanceof ChatTurnFailedError) {
+        if (isForbiddenError(err)) {
+          setIsForbidden(true);
+          setError(FORBIDDEN_WORKSPACE_MESSAGE);
+        } else if (err instanceof ChatTurnFailedError) {
           setError(err.message);
         } else {
-          setError(err instanceof Error ? err.message : 'Failed to send message');
+          setError(messageFromApiError(err, 'Failed to send message'));
         }
       } finally {
         if (pollAbortRef.current === abortController) {
@@ -122,6 +154,7 @@ export function useChat(workspaceId: string | null) {
         }
         if (!abortController.signal.aborted) {
           setIsLoading(false);
+          setStatusMessage(null);
         }
       }
     },
@@ -133,7 +166,9 @@ export function useChat(workspaceId: string | null) {
     lastTurn,
     isLoadingHistory,
     isLoading,
+    statusMessage,
     error,
+    isForbidden,
     sendMessage,
   };
 }

@@ -1,4 +1,6 @@
-/** Lesson iframe URLs — prefer same-origin /workspaces/... proxy paths. */
+/** Virtual same-origin URLs for cached workspace files: /__workspace/{id}/{path} */
+
+export const WORKSPACE_VIRTUAL_PREFIX = '/__workspace';
 
 export function resolveLessonUrl(url: string): string {
   if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -12,51 +14,81 @@ export function isExternalLessonUrl(url: string): boolean {
   return resolved.startsWith('http://') || resolved.startsWith('https://');
 }
 
-/** Extract workspace id + relative file path from a proxy or S3 URL. */
-export function parseWorkspaceFileUrl(url: string): { workspaceId: string; filePath: string } | null {
+export function isVirtualWorkspaceUrl(url: string): boolean {
+  return url.startsWith(`${WORKSPACE_VIRTUAL_PREFIX}/`);
+}
+
+/** Extract workspace id + relative file path from a virtual, proxy, or S3-style URL. */
+export function parseWorkspaceFileUrl(
+  url: string,
+): { workspaceId: string; filePath: string } | null {
   try {
     const parsed = new URL(url, window.location.origin);
-    const match = decodeURIComponent(parsed.pathname).match(/\/workspaces\/([^/]+)\/(.+)$/);
-    if (!match?.[1] || !match[2]) {
-      return null;
+    const decoded = decodeURIComponent(parsed.pathname);
+
+    const virtualMatch = decoded.match(/^\/__workspace\/([^/]+)\/(.+)$/);
+    if (virtualMatch?.[1] && virtualMatch[2]) {
+      return { workspaceId: virtualMatch[1], filePath: virtualMatch[2] };
     }
-    return { workspaceId: match[1], filePath: match[2] };
+
+    const proxyMatch = decoded.match(/\/workspaces\/([^/]+)\/(.+)$/);
+    if (proxyMatch?.[1] && proxyMatch[2]) {
+      return { workspaceId: proxyMatch[1], filePath: proxyMatch[2] };
+    }
+
+    return null;
   } catch {
     return null;
   }
 }
 
-/** Map S3 or proxy URL to same-origin /workspaces/{id}/{path} (no query string). */
-export function toWorkspaceProxyUrl(url: string, workspaceId?: string): string | null {
-  const direct = resolveLessonUrl(url);
-  if (direct.startsWith('/workspaces/')) {
-    const parsed = parseWorkspaceFileUrl(direct);
+/** Build the virtual URL used by the iframe after files are cached locally. */
+export function workspaceVirtualUrl(workspaceId: string, filePath: string): string {
+  const cleaned = filePath.replace(/^\/+/, '');
+  return `${WORKSPACE_VIRTUAL_PREFIX}/${workspaceId}/${cleaned}`;
+}
+
+/**
+ * Normalize any path, proxy URL, virtual URL, or S3-style URL to a virtual
+ * `/__workspace/{id}/{path}` URL for local navigation.
+ */
+export function normalizeLessonUrl(url: string, workspaceId?: string): string {
+  if (!url) {
+    return url;
+  }
+
+  if (isVirtualWorkspaceUrl(url)) {
+    const parsed = parseWorkspaceFileUrl(url);
     if (!parsed) {
-      return direct.split('?')[0] ?? direct;
+      return url.split('?')[0] ?? url;
     }
     if (workspaceId && parsed.workspaceId !== workspaceId) {
-      return null;
+      return workspaceVirtualUrl(workspaceId, parsed.filePath);
     }
-    return `/workspaces/${parsed.workspaceId}/${parsed.filePath}`;
+    return workspaceVirtualUrl(parsed.workspaceId, parsed.filePath);
   }
 
   const parsed = parseWorkspaceFileUrl(url);
-  if (!parsed) {
-    return null;
+  if (parsed) {
+    const id = workspaceId ?? parsed.workspaceId;
+    return workspaceVirtualUrl(id, parsed.filePath);
   }
-  if (workspaceId && parsed.workspaceId !== workspaceId) {
-    return null;
+
+  // Bare relative path: lessons/0001-….html
+  if (workspaceId && !url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('/')) {
+    return workspaceVirtualUrl(workspaceId, url);
   }
-  return `/workspaces/${parsed.workspaceId}/${parsed.filePath}`;
+
+  if (workspaceId && url.startsWith('/') && !url.startsWith('/__workspace/') && !url.startsWith('/workspaces/')) {
+    return workspaceVirtualUrl(workspaceId, url.replace(/^\/+/, ''));
+  }
+
+  return resolveLessonUrl(url);
 }
 
-/** Prefer /workspaces/... proxy path so iframe assets and links stay same-origin. */
-export function normalizeLessonUrl(url: string, workspaceId?: string): string {
-  return toWorkspaceProxyUrl(url, workspaceId) ?? resolveLessonUrl(url);
-}
-
+/** @deprecated Prefer isVirtualWorkspaceUrl — kept for callers during migration. */
 export function isProxyWorkspaceUrl(url: string): boolean {
-  return url.startsWith('/workspaces/');
+  return isVirtualWorkspaceUrl(url) || url.startsWith('/workspaces/');
 }
 
 export function filenameFromLessonUrl(url: string): string {
@@ -77,10 +109,30 @@ export function formatFromMaterialPath(path: string): 'html' | 'markdown' {
   return path.toLowerCase().endsWith('.md') ? 'markdown' : 'html';
 }
 
+export function pathFromLessonUrl(url: string, workspaceId?: string): string | null {
+  const normalized = workspaceId ? normalizeLessonUrl(url, workspaceId) : normalizeLessonUrl(url);
+  const parsed = parseWorkspaceFileUrl(normalized);
+  return parsed?.filePath ?? null;
+}
+
+/** True when two lesson/material URLs point at the same workspace file. */
+export function sameWorkspaceFileUrl(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  if (a === b) {
+    return true;
+  }
+
+  const pathA = pathFromLessonUrl(a) ?? a.split('?')[0];
+  const pathB = pathFromLessonUrl(b) ?? b.split('?')[0];
+  return Boolean(pathA && pathB && pathA === pathB);
+}
+
 export function quizJsUrlFromLesson(lessonUrl: string): string {
   const info = parseWorkspaceFileUrl(lessonUrl);
   if (info) {
-    return `/workspaces/${info.workspaceId}/assets/quiz.js`;
+    return workspaceVirtualUrl(info.workspaceId, 'assets/quiz.js');
   }
 
   const resolved = resolveLessonUrl(lessonUrl);
@@ -89,7 +141,7 @@ export function quizJsUrlFromLesson(lessonUrl: string): string {
   return `${parsed.origin}${rootPath}/assets/quiz.js`;
 }
 
-/** Resolve in-workspace link clicks to a proxy URL for iframe navigation. */
+/** Resolve in-workspace link clicks to a virtual URL for iframe navigation. */
 export function resolveWorkspaceNavUrl(
   href: string,
   baseUrl: string,
@@ -102,8 +154,53 @@ export function resolveWorkspaceNavUrl(
   try {
     const base = new URL(baseUrl, window.location.origin);
     const target = new URL(href, base);
-    return toWorkspaceProxyUrl(target.href, workspaceId);
+
+    // External absolute URLs stay outside the lesson viewer.
+    if (target.origin !== window.location.origin) {
+      return null;
+    }
+
+    const normalized = normalizeLessonUrl(target.href, workspaceId);
+    return isVirtualWorkspaceUrl(normalized) ? normalized : null;
   } catch {
     return null;
   }
+}
+
+/** True for http(s) links that leave the app origin. */
+export function isExternalHttpUrl(href: string, baseUrl?: string): boolean {
+  if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('javascript:')) {
+    return false;
+  }
+  try {
+    const target = new URL(href, baseUrl ?? window.location.origin);
+    return (
+      (target.protocol === 'http:' || target.protocol === 'https:') &&
+      target.origin !== window.location.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function kindFromMaterialPath(path: string): 'reference' | 'learning_record' | 'resource' {
+  if (path.startsWith('reference/')) {
+    return 'reference';
+  }
+  if (path.startsWith('learning-records/')) {
+    return 'learning_record';
+  }
+  return 'resource';
+}
+
+export function isLessonPath(path: string): boolean {
+  return path.startsWith('lessons/') && /\.html?$/i.test(path);
+}
+
+export function isMaterialPath(path: string): boolean {
+  return (
+    path.startsWith('reference/') ||
+    path.startsWith('learning-records/') ||
+    path.startsWith('resources/')
+  );
 }

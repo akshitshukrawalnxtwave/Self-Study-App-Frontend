@@ -1,54 +1,38 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { LearningMaterialSummary } from '../types/api';
-import { fetchWorkspaceLearningMaterials } from '../api/workspaces';
-import { normalizeLessonUrl } from '../utils/lessonUrls';
+import { normalizeLessonUrl, sameWorkspaceFileUrl } from '../utils/lessonUrls';
 
-function normalizeMaterials(
-  items: LearningMaterialSummary[],
-  workspaceId: string,
-): LearningMaterialSummary[] {
-  return items.map((item) => ({
-    ...item,
-    url: normalizeLessonUrl(item.url, workspaceId),
-  }));
-}
+type UseLearningMaterialsArgs = {
+  workspaceId: string | null;
+  materials: LearningMaterialSummary[];
+  isSyncing: boolean;
+};
 
-export function useLearningMaterials(workspaceId: string | null) {
-  const [materials, setMaterials] = useState<LearningMaterialSummary[]>([]);
+/**
+ * Material selection on top of shared workspace file sync.
+ * List comes from the manifest (useWorkspaceFiles).
+ */
+export function useLearningMaterials({
+  workspaceId,
+  materials,
+  isSyncing,
+}: UseLearningMaterialsArgs) {
   const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
 
-  const loadMaterials = useCallback(async () => {
+  useEffect(() => {
     if (!workspaceId) {
-      return [];
-    }
-
-    setIsLoading(true);
-    try {
-      const items = await fetchWorkspaceLearningMaterials(workspaceId);
-      const normalized = normalizeMaterials(items, workspaceId);
-      setMaterials(normalized);
-      return normalized;
-    } finally {
-      setIsLoading(false);
+      setSelectedUrl(null);
     }
   }, [workspaceId]);
 
   useEffect(() => {
-    if (!workspaceId) {
-      setMaterials([]);
-      setSelectedUrl(null);
+    if (isSyncing) {
       return;
     }
-
-    void loadMaterials();
-  }, [workspaceId, loadMaterials]);
-
-  useEffect(() => {
     if (!selectedUrl && materials.length > 0) {
       setSelectedUrl(materials[0].url);
     }
-  }, [materials, selectedUrl]);
+  }, [materials, selectedUrl, isSyncing]);
 
   const selectMaterial = useCallback(
     (url: string) => {
@@ -58,14 +42,13 @@ export function useLearningMaterials(workspaceId: string | null) {
   );
 
   const selectedMaterial =
-    materials.find((material) => material.url === selectedUrl) ?? null;
+    materials.find((material) => sameWorkspaceFileUrl(material.url, selectedUrl)) ?? null;
 
   return {
     materials,
     selectedUrl,
     selectedMaterial,
-    isLoading,
+    isLoading: isSyncing,
     selectMaterial,
-    reloadMaterials: loadMaterials,
   };
 }

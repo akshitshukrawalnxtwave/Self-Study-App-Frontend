@@ -41,9 +41,9 @@ export function NewSessionModal({ open, onClose, onCreate }: NewSessionModalProp
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2 className="modal__title">New session</h2>
+        <h2 className="modal__title">New skill</h2>
         <p className="modal__description">
-          Enter a topic to start learning. The teacher will chat with you and create lessons as you go.
+          Enter a topic to start learning. The Self Study AI Assistant will chat with you and create lessons as you go.
         </p>
         <form onSubmit={handleSubmit}>
           <label className="modal__label" htmlFor="session-title">
@@ -67,7 +67,7 @@ export function NewSessionModal({ open, onClose, onCreate }: NewSessionModalProp
               className="modal__button modal__button--primary"
               disabled={isSubmitting || !title.trim()}
             >
-              {isSubmitting ? 'Creating…' : 'Start session'}
+              {isSubmitting ? 'Creating…' : 'Start learning'}
             </button>
           </div>
         </form>
